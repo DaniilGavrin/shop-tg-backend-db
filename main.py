@@ -10,12 +10,24 @@ import jwt
 
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+
+from database.db import db
+from database.catalog_repository import catalog_repo
+from dotenv import load_dotenv
+
+load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 JWT_SECRET = os.getenv("JWT_SECRET")
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await db.connect()
+    yield
+    await db.disconnect()
 
+app = FastAPI(lifespan=lifespan)
 
 # CORS
 app.add_middleware(
@@ -95,6 +107,29 @@ async def root():
         "message": "FastAPI Telegram Backend Running"
     }
 
+@app.get("/catalog")
+async def catalog_get():
+    return {
+        "items": await catalog_repo.get_catalog()
+    }
+
+@app.get("/catalog/{item_id}")
+async def catalog_item_get(item_id: int):
+
+    item = await catalog_repo.get_catalog_item(item_id)
+
+    if not item:
+        raise HTTPException(
+            status_code=404,
+            detail="Item not found"
+        )
+
+    if item.get("metadata"):
+        item["metadata"] = json.loads(item["metadata"])
+
+    return {
+        "item": item
+    }
 
 @app.post("/auth/telegram/webapp")
 async def telegram_webapp_auth(data: dict):
