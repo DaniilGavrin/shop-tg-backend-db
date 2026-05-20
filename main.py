@@ -1,0 +1,155 @@
+import os
+import json
+import time
+import hashlib
+import hmac
+
+from urllib.parse import parse_qsl
+
+import jwt
+
+from fastapi import FastAPI, HTTPException, Header
+from fastapi.middleware.cors import CORSMiddleware
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+JWT_SECRET = os.getenv("JWT_SECRET")
+
+app = FastAPI()
+
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def verify_telegram_webapp(init_data: str):
+    parsed_data = dict(parse_qsl(init_data))
+
+    received_hash = parsed_data.pop("hash", None)
+
+    if not received_hash:
+        return None
+
+    data_check_string = "\n".join(
+        f"{k}={v}"
+        for k, v in sorted(parsed_data.items())
+    )
+
+    secret_key = hmac.new(
+        b"WebAppData",
+        BOT_TOKEN.encode(),
+        hashlib.sha256
+    ).digest()
+
+    calculated_hash = hmac.new(
+        secret_key,
+        data_check_string.encode(),
+        hashlib.sha256
+    ).hexdigest()
+
+    if not hmac.compare_digest(
+        calculated_hash,
+        received_hash
+    ):
+        return None
+
+    user_data = json.loads(parsed_data["user"])
+
+    return user_data
+
+
+def create_jwt(user_data: dict):
+    payload = {
+        "user_id": user_data["id"],
+        "username": user_data.get("username"),
+        "exp": int(time.time()) + (60 * 60 * 24 * 7)
+    }
+
+    return jwt.encode(
+        payload,
+        JWT_SECRET,
+        algorithm="HS256"
+    )
+
+
+def verify_jwt(token: str):
+    try:
+        return jwt.decode(
+            token,
+            JWT_SECRET,
+            algorithms=["HS256"]
+        )
+    except:
+        return None
+
+
+@app.get("/")
+async def root():
+    return {
+        "status": "ok",
+        "message": "FastAPI Telegram Backend Running"
+    }
+
+
+@app.post("/auth/telegram/webapp")
+async def telegram_webapp_auth(data: dict):
+
+    init_data = data.get("init_data")
+
+    if not init_data:
+        raise HTTPException(
+            status_code=400,
+            detail="init_data missing"
+        )
+
+    user_data = verify_telegram_webapp(init_data)
+
+    if not user_data:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Telegram auth"
+        )
+
+    token = create_jwt(user_data)
+
+    return {
+        "success": True,
+        "token": token,
+        "user": user_data
+    }
+
+
+@app.get("/me")
+async def me(authorization: str = Header(None)):
+
+    if not authorization:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing token"
+        )
+
+    try:
+        scheme, token = authorization.split(" ")
+    except:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid auth header"
+        )
+
+    payload = verify_jwt(token)
+
+    if not payload:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid token"
+        )
+
+    return {
+        "authorized": True,
+        "payload": payload
+    }
