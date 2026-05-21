@@ -113,6 +113,12 @@ async def catalog_get():
         "items": await catalog_repo.get_catalog()
     }
 
+@app.get("/admin/catalog")
+async def admin_catalog_get():
+    return {
+        "items": await catalog_repo.admin_get_catalog()
+    }
+
 @app.get("/catalog/{item_id}")
 async def catalog_item_get(item_id: int):
 
