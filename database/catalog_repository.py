@@ -12,6 +12,16 @@ class CatalogRepository:
 
         return [dict(row) for row in rows]
     
+    async def get_featured_catalog(self):
+        query = """
+            SELECT id, name, base_price_rub, slug, category, preview_image
+            FROM products
+            WHERE is_featured = true
+        """
+        rows = await db.fetch(query)
+
+        return [dict(row) for row in rows]
+    
     async def admin_get_catalog(self):
         query = """
             SELECT id, name, metadata, base_price_rub, slug, category, preview_image

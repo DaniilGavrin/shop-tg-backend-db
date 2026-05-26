@@ -20,6 +20,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 JWT_SECRET = os.getenv("JWT_SECRET")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -111,6 +112,12 @@ async def root():
 async def catalog_get():
     return {
         "items": await catalog_repo.get_catalog()
+    }
+
+@app.get("/catalog/featured")
+async def catalog_featured_get():
+    return {
+        "items": await catalog_repo.get_featured_catalog()
     }
 
 @app.get("/admin/catalog")
