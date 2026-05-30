@@ -232,5 +232,5 @@ async def verify_telegram_user(user: TelegramUserVerify):
             }
         }
     except Exception as e:
-        # Логируем ошибку, но не светим детали наружу
-        raise HTTPException(status_code=500, detail="Database error")
+        print("UPSERT ERROR:", e)
+        raise HTTPException(status_code=500, detail=str(e))
