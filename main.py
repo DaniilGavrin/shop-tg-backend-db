@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 
 from database.db import db
 from database.catalog_repository import catalog_repo
+from models import TelegramUserVerify
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -201,3 +202,35 @@ async def me(authorization: str = Header(None)):
         "authorized": True,
         "payload": payload
     }
+
+
+@app.post("/users/verify")
+async def verify_telegram_user(user: TelegramUserVerify):
+    """
+    Принимает данные от виджета Телеграма и делает UPSERT в БД.
+    Возвращает актуального юзера.
+    """
+    try:
+        # 🔹 Вызываем метод БД (код ниже)
+        await db.upsert_telegram_user(
+            tg_id=user.tg_id,
+            first_name=user.first_name,
+            username=user.username,
+            last_name=user.last_name,
+            phone=user.phone,
+            photo_url=user.photo_url
+        )
+
+        # 🔹 Возвращаем фронтенду подтверждение
+        return {
+            "ok": True,
+            "user": {
+                "id": user.tg_id,
+                "first_name": user.first_name,
+                "username": user.username,
+                "phone": user.phone,  # Можно вернуть, если нужно показать в профиле
+            }
+        }
+    except Exception as e:
+        # Логируем ошибку, но не светим детали наружу
+        raise HTTPException(status_code=500, detail="Database error")
