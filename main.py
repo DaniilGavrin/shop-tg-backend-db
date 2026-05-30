@@ -217,8 +217,7 @@ async def verify_telegram_user(user: TelegramUserVerify):
             first_name=user.first_name,
             username=user.username,
             last_name=user.last_name,
-            phone=user.phone,
-            photo_url=user.photo_url
+            phone=user.phone
         )
 
         # 🔹 Возвращаем фронтенду подтверждение
