@@ -8,7 +8,7 @@ from jose import jwt
 from jose.exceptions import JWTError, ExpiredSignatureError
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-TG_BOT_ID = BOT_TOKEN.split(':')[0] if BOT_TOKEN else None  # Извлекаем BOT_ID из токена
+TG_BOT_ID = BOT_TOKEN.split(':')[0] if BOT_TOKEN else None
 
 def verify_telegram_webapp(init_data: str) -> dict | None:
     """Криптографически проверяет initData от Telegram Mini App."""
@@ -53,17 +53,15 @@ def verify_telegram_oidc(id_token: str) -> dict | None:
     Использует стандартный JWKS endpoint Telegram.
     """
     try:
-        # 1. Получаем публичные ключи Telegram через Well-Known URI
         jwks_url = "https://oauth.telegram.org/.well-known/jwks.json"
         print(f"[OIDC] Fetching JWKS from: {jwks_url}")
         
         jwks_response = requests.get(jwks_url, timeout=5)
         print(f"[OIDC] JWKS Response Status: {jwks_response.status_code}")
-        print(f"[OIDC] JWKS Response Text: {jwks_response.text[:200]}")  # Логируем первые 200 символов
+        print(f"[OIDC] JWKS Response Text: {jwks_response.text[:200]}")
         
         if jwks_response.status_code != 200:
             print(f"[OIDC ERROR] Failed to fetch JWKS: {jwks_response.status_code}")
-            # Fallback: пробуем другой URL
             jwks_url = "https://oauth.telegram.org/.well-known/openid-configuration"
             jwks_response = requests.get(jwks_url, timeout=5)
             if jwks_response.status_code == 200:
@@ -101,15 +99,12 @@ def verify_telegram_oidc(id_token: str) -> dict | None:
             id_token,
             public_key,
             algorithms=["RS256"],
-            audience=TG_BOT_ID,  # ← ИСПРАВЛЕНО: используем BOT_ID, а не client_id из env
+            audience=TG_BOT_ID,
             issuer="https://oauth.telegram.org"
         )
         
         print(f"[OIDC] Token payload: {payload}")
-        
-        # 5. Извлекаем данные пользователя
-        # ВАЖНО: В Telegram OIDC "id" — это настоящий Telegram user ID
-        # "sub" — это внутренний идентификатор, который может отличаться
+
         tg_id = payload.get("id") or payload.get("sub")
         
         return {
