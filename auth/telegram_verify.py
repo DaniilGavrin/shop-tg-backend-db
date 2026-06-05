@@ -1,21 +1,17 @@
-# auth/telegram_verify.py
 import os
 import json
 import hashlib
 import hmac
 from urllib.parse import parse_qsl
 import requests
-from jose import jwt, jwk
+from jose import jwt
 from jose.exceptions import JWTError, ExpiredSignatureError
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-TG_CLIENT_ID = os.getenv("NEXT_PUBLIC_TG_CLIENT_ID")
+TG_BOT_ID = BOT_TOKEN.split(':')[0] if BOT_TOKEN else None  # Извлекаем BOT_ID из токена
 
 def verify_telegram_webapp(init_data: str) -> dict | None:
-    """
-    Криптографически проверяет initData от Telegram Mini App.
-    Возвращает данные пользователя или None.
-    """
+    """Криптографически проверяет initData от Telegram Mini App."""
     try:
         parsed_data = dict(parse_qsl(init_data))
         received_hash = parsed_data.pop("hash", None)
@@ -23,13 +19,11 @@ def verify_telegram_webapp(init_data: str) -> dict | None:
         if not received_hash:
             return None
         
-        # Формируем строку для проверки
         data_check_string = "\n".join(
             f"{k}={v}"
             for k, v in sorted(parsed_data.items())
         )
         
-        # Вычисляем HMAC-SHA256
         secret_key = hmac.new(
             b"WebAppData",
             BOT_TOKEN.encode(),
@@ -42,11 +36,9 @@ def verify_telegram_webapp(init_data: str) -> dict | None:
             hashlib.sha256
         ).hexdigest()
         
-        # Сравниваем хэши (timing-safe)
         if not hmac.compare_digest(calculated_hash, received_hash):
             return None
         
-        # Парсим данные пользователя
         user_data = json.loads(parsed_data.get("user", "{}"))
         return user_data
         
@@ -58,18 +50,35 @@ def verify_telegram_webapp(init_data: str) -> dict | None:
 def verify_telegram_oidc(id_token: str) -> dict | None:
     """
     Проверяет id_token от Telegram Login Widget (OIDC).
-    Использует python-jose для проверки JWKS.
+    Использует стандартный JWKS endpoint Telegram.
     """
     try:
-        # 1. Получаем публичные ключи Telegram
-        jwks_url = "https://oauth.telegram.org/auth/getkeys"
+        # 1. Получаем публичные ключи Telegram через Well-Known URI
+        jwks_url = "https://oauth.telegram.org/.well-known/jwks.json"
+        print(f"[OIDC] Fetching JWKS from: {jwks_url}")
+        
         jwks_response = requests.get(jwks_url, timeout=5)
+        print(f"[OIDC] JWKS Response Status: {jwks_response.status_code}")
+        print(f"[OIDC] JWKS Response Text: {jwks_response.text[:200]}")  # Логируем первые 200 символов
+        
+        if jwks_response.status_code != 200:
+            print(f"[OIDC ERROR] Failed to fetch JWKS: {jwks_response.status_code}")
+            # Fallback: пробуем другой URL
+            jwks_url = "https://oauth.telegram.org/.well-known/openid-configuration"
+            jwks_response = requests.get(jwks_url, timeout=5)
+            if jwks_response.status_code == 200:
+                config = jwks_response.json()
+                jwks_url = config.get("jwks_uri")
+                jwks_response = requests.get(jwks_url, timeout=5)
+        
         jwks_response.raise_for_status()
         jwks_data = jwks_response.json()
+        print(f"[OIDC] JWKS Keys: {len(jwks_data.get('keys', []))}")
         
-        # 2. Декодируем заголовок токена для получения kid (key ID)
+        # 2. Декодируем заголовок токена для получения kid
         unverified_header = jwt.get_unverified_header(id_token)
         kid = unverified_header.get("kid")
+        print(f"[OIDC] Token kid: {kid}")
         
         if not kid:
             print("[OIDC ERROR] No kid in token header")
@@ -79,7 +88,6 @@ def verify_telegram_oidc(id_token: str) -> dict | None:
         public_key = None
         for key_data in jwks_data.get("keys", []):
             if key_data.get("kid") == kid:
-                # python-jose может работать с JWK dict напрямую!
                 public_key = key_data
                 break
         
@@ -88,23 +96,29 @@ def verify_telegram_oidc(id_token: str) -> dict | None:
             return None
         
         # 4. Проверяем подпись и claims
-        # python-jose принимает JWK dict напрямую в jwt.decode!
+        # Используем BOT_ID (первая часть BOT_TOKEN) как audience
         payload = jwt.decode(
             id_token,
-            public_key,  # Передаём dict с JWK данными
+            public_key,
             algorithms=["RS256"],
-            audience=TG_CLIENT_ID,
+            audience=TG_BOT_ID,  # ← ИСПРАВЛЕНО: используем BOT_ID, а не client_id из env
             issuer="https://oauth.telegram.org"
         )
         
+        print(f"[OIDC] Token payload: {payload}")
+        
         # 5. Извлекаем данные пользователя
+        # ВАЖНО: В Telegram OIDC "id" — это настоящий Telegram user ID
+        # "sub" — это внутренний идентификатор, который может отличаться
+        tg_id = payload.get("id") or payload.get("sub")
+        
         return {
-            "id": int(payload.get("sub")),
+            "id": int(tg_id),
             "first_name": payload.get("given_name", payload.get("first_name", "User")),
             "last_name": payload.get("family_name", payload.get("last_name", "")),
             "username": payload.get("preferred_username", ""),
             "photo_url": payload.get("picture", ""),
-            "phone": payload.get("phone", "")
+            "phone": payload.get("phone_number", "")
         }
         
     except ExpiredSignatureError:
@@ -115,4 +129,6 @@ def verify_telegram_oidc(id_token: str) -> dict | None:
         return None
     except Exception as e:
         print(f"[OIDC ERROR] Unexpected error: {e}")
+        import traceback
+        traceback.print_exc()
         return None
