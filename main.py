@@ -91,7 +91,8 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str):
         secure=True,  # Только HTTPS
         samesite="none",  # Для cross-domain cookies
         max_age=15 * 60,  # 15 минут
-        path="/"
+        path="/",
+        domain=".bytewizard.ru"
     )
     
     # Refresh Token (30 дней)
@@ -102,7 +103,8 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str):
         secure=True,
         samesite="none",
         max_age=30 * 24 * 60 * 60,  # 30 дней
-        path="/"
+        path="/",
+        domain=".bytewizard.ru"
     )
 
 @app.post("/auth/telegram/webapp")
@@ -196,7 +198,8 @@ async def refresh_access_token(
         secure=True,
         samesite="none",
         max_age=15 * 60,
-        path="/"
+        path="/",
+        domain=".bytewizard.ru"
     )
     
     return {
@@ -214,8 +217,8 @@ async def logout(
         revoke_refresh_token(refresh_token)
     
     # Удаляем cookies
-    response.delete_cookie("access_token", path="/")
-    response.delete_cookie("refresh_token", path="/")
+    response.delete_cookie("access_token", path="/", domain=".bytewizard.ru")
+    response.delete_cookie("refresh_token", path="/", domain=".bytewizard.ru")
     
     return {
         "success": True,
