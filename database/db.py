@@ -64,4 +64,14 @@ class Database:
             tg_id, first_name, username, last_name, phone
         )
 
+    async def get_user_by_tg_id(self, tg_id: int) -> dict | None:
+        """Получить данные пользователя по tg_id"""
+        query = """
+            SELECT tg_id, first_name, username, last_name, phone
+            FROM users
+            WHERE tg_id = $1
+        """
+        row = await self.fetchrow(query, tg_id)
+        return dict(row) if row else None
+
 db = Database()

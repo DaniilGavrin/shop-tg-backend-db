@@ -1,27 +1,27 @@
+# main.py
 import os
 import json
-import time
-import hashlib
-import hmac
-
-from urllib.parse import parse_qsl
-
-import jwt
-
-from fastapi import FastAPI, HTTPException, Header
-from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Depends, Response, Cookie
+from fastapi.middleware.cors import CORSMiddleware
+from typing import Optional
 
 from database.db import db
 from database.catalog_repository import catalog_repo
-from models import TelegramUserVerify
+from models import TelegramUserVerify, TelegramWebAppAuth, TelegramOIDCAuth
+from auth.jwt_utils import create_access_token, create_refresh_token, verify_access_token
+from auth.redis_client import (
+    store_refresh_token, 
+    get_tg_id_by_refresh_token, 
+    revoke_refresh_token,
+    revoke_all_user_sessions
+)
+from auth.telegram_verify import verify_telegram_webapp, verify_telegram_oidc
+from auth.dependencies import get_current_user, get_optional_user
+
 from dotenv import load_dotenv
 
 load_dotenv()
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-JWT_SECRET = os.getenv("JWT_SECRET")
-DATABASE_URL = os.getenv("DATABASE_URL")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -31,76 +31,20 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# CORS
+# CORS для cross-domain cookies
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://shop.bytewizard.ru",],
-    allow_credentials=True,
+    allow_origins=[
+        "https://shop.bytewizard.ru",  # Для локальной разработки
+    ],
+    allow_credentials=True,  # ВАЖНО для cookies!
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-
-def verify_telegram_webapp(init_data: str):
-    parsed_data = dict(parse_qsl(init_data))
-
-    received_hash = parsed_data.pop("hash", None)
-
-    if not received_hash:
-        return None
-
-    data_check_string = "\n".join(
-        f"{k}={v}"
-        for k, v in sorted(parsed_data.items())
-    )
-
-    secret_key = hmac.new(
-        b"WebAppData",
-        BOT_TOKEN.encode(),
-        hashlib.sha256
-    ).digest()
-
-    calculated_hash = hmac.new(
-        secret_key,
-        data_check_string.encode(),
-        hashlib.sha256
-    ).hexdigest()
-
-    if not hmac.compare_digest(
-        calculated_hash,
-        received_hash
-    ):
-        return None
-
-    user_data = json.loads(parsed_data["user"])
-
-    return user_data
-
-
-def create_jwt(user_data: dict):
-    payload = {
-        "user_id": user_data["id"],
-        "username": user_data.get("username"),
-        "exp": int(time.time()) + (60 * 60 * 24 * 7)
-    }
-
-    return jwt.encode(
-        payload,
-        JWT_SECRET,
-        algorithm="HS256"
-    )
-
-
-def verify_jwt(token: str):
-    try:
-        return jwt.decode(
-            token,
-            JWT_SECRET,
-            algorithms=["HS256"]
-        )
-    except:
-        return None
-
+# ============================================
+# PUBLIC ROUTES (каталог доступен всем)
+# ============================================
 
 @app.get("/")
 async def root():
@@ -121,97 +65,191 @@ async def catalog_featured_get():
         "items": await catalog_repo.get_featured_catalog()
     }
 
-@app.get("/admin/catalog")
-async def admin_catalog_get():
-    return {
-        "items": await catalog_repo.admin_get_catalog()
-    }
-
 @app.get("/catalog/{item_id}")
 async def catalog_item_get(item_id: int):
-
     item = await catalog_repo.get_catalog_item(item_id)
-
+    
     if not item:
-        raise HTTPException(
-            status_code=404,
-            detail="Item not found"
-        )
-
+        raise HTTPException(status_code=404, detail="Item not found")
+    
     if item.get("metadata"):
         item["metadata"] = json.loads(item["metadata"])
+    
+    return {"item": item}
 
-    return {
-        "item": item
-    }
+# ============================================
+# AUTH ROUTES (авторизация)
+# ============================================
+
+def set_auth_cookies(response: Response, access_token: str, refresh_token: str):
+    """Устанавливает HttpOnly cookies для токенов"""
+    # Access Token (15 минут)
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        secure=True,  # Только HTTPS
+        samesite="none",  # Для cross-domain cookies
+        max_age=15 * 60,  # 15 минут
+        path="/"
+    )
+    
+    # Refresh Token (30 дней)
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        max_age=30 * 24 * 60 * 60,  # 30 дней
+        path="/"
+    )
 
 @app.post("/auth/telegram/webapp")
-async def telegram_webapp_auth(data: dict):
-
-    init_data = data.get("init_data")
-
-    if not init_data:
-        raise HTTPException(
-            status_code=400,
-            detail="init_data missing"
-        )
-
-    user_data = verify_telegram_webapp(init_data)
-
+async def telegram_webapp_auth(data: TelegramWebAppAuth, response: Response):
+    """Авторизация через Telegram Mini App (initData)"""
+    user_data = verify_telegram_webapp(data.init_data)
+    
     if not user_data:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid Telegram auth"
-        )
-
-    token = create_jwt(user_data)
-
+        raise HTTPException(status_code=401, detail="Invalid Telegram auth")
+    
+    tg_id = int(user_data["id"])
+    username = user_data.get("username")
+    
+    # Создаем токены
+    access_token = create_access_token(tg_id, username)
+    refresh_token = create_refresh_token()
+    
+    # Сохраняем refresh token в Redis
+    store_refresh_token(tg_id, refresh_token)
+    
+    # Устанавливаем cookies
+    set_auth_cookies(response, access_token, refresh_token)
+    
     return {
         "success": True,
-        "token": token,
+        "user": {
+            "id": tg_id,
+            "first_name": user_data.get("first_name"),
+            "last_name": user_data.get("last_name"),
+            "username": username,
+            "photo_url": user_data.get("photo_url")
+        }
+    }
+
+@app.post("/auth/telegram/oidc")
+async def telegram_oidc_auth(data: TelegramOIDCAuth, response: Response):
+    """Авторизация через Telegram Login Widget (OIDC id_token)"""
+    user_data = verify_telegram_oidc(data.id_token)
+    
+    if not user_data:
+        raise HTTPException(status_code=401, detail="Invalid Telegram OIDC token")
+    
+    tg_id = user_data["id"]
+    username = user_data.get("username")
+    
+    # Создаем токены
+    access_token = create_access_token(tg_id, username)
+    refresh_token = create_refresh_token()
+    
+    # Сохраняем refresh token в Redis
+    store_refresh_token(tg_id, refresh_token)
+    
+    # Устанавливаем cookies
+    set_auth_cookies(response, access_token, refresh_token)
+    
+    return {
+        "success": True,
         "user": user_data
     }
 
-
-@app.get("/me")
-async def me(authorization: str = Header(None)):
-
-    if not authorization:
-        raise HTTPException(
-            status_code=401,
-            detail="Missing token"
-        )
-
-    try:
-        scheme, token = authorization.split(" ")
-    except:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid auth header"
-        )
-
-    payload = verify_jwt(token)
-
-    if not payload:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid token"
-        )
-
+@app.post("/auth/refresh")
+async def refresh_access_token(
+    response: Response,
+    refresh_token: Optional[str] = Cookie(None)
+):
+    """Обновление access token через refresh token"""
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="Refresh token missing")
+    
+    # Проверяем refresh token в Redis
+    tg_id = get_tg_id_by_refresh_token(refresh_token)
+    
+    if not tg_id:
+        # Токен недействителен или истек
+        response.delete_cookie("access_token")
+        response.delete_cookie("refresh_token")
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    
+    # Получаем данные пользователя из БД для username
+    user = await db.get_user_by_tg_id(tg_id)
+    username = user.get("username") if user else None
+    
+    # Создаем новый access token
+    new_access_token = create_access_token(tg_id, username)
+    
+    # Обновляем cookie
+    response.set_cookie(
+        key="access_token",
+        value=new_access_token,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        max_age=15 * 60,
+        path="/"
+    )
+    
     return {
-        "authorized": True,
-        "payload": payload
+        "success": True,
+        "message": "Token refreshed"
     }
 
+@app.post("/auth/logout")
+async def logout(
+    response: Response,
+    refresh_token: Optional[str] = Cookie(None)
+):
+    """Выход из системы (отзыв refresh token)"""
+    if refresh_token:
+        revoke_refresh_token(refresh_token)
+    
+    # Удаляем cookies
+    response.delete_cookie("access_token", path="/")
+    response.delete_cookie("refresh_token", path="/")
+    
+    return {
+        "success": True,
+        "message": "Logged out"
+    }
+
+# ============================================
+# PROTECTED ROUTES (требуют авторизации)
+# ============================================
+
+@app.get("/me")
+async def get_me(current_user: dict = Depends(get_current_user)):
+    """Получить данные текущего пользователя"""
+    return {
+        "authorized": True,
+        "user": current_user
+    }
 
 @app.post("/users/verify")
-async def verify_telegram_user(user: TelegramUserVerify):
+async def verify_telegram_user(
+    user: TelegramUserVerify,
+    current_user: dict = Depends(get_current_user)
+):
     """
-    Принимает данные от виджета Телеграма и делает UPSERT в БД.
-    Возвращает актуального юзера.
+    Обновление данных пользователя в БД.
+    Требует авторизации (защита от подделки tg_id).
     """
+    if current_user["tg_id"] != user.tg_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot update another user's data"
+        )
+    
     try:
-        # 🔹 Вызываем метод БД (код ниже)
         await db.upsert_telegram_user(
             tg_id=user.tg_id,
             first_name=user.first_name,
@@ -219,17 +257,28 @@ async def verify_telegram_user(user: TelegramUserVerify):
             last_name=user.last_name,
             phone=user.phone
         )
-
-        # 🔹 Возвращаем фронтенду подтверждение
+        
         return {
             "ok": True,
             "user": {
                 "id": user.tg_id,
                 "first_name": user.first_name,
                 "username": user.username,
-                "phone": user.phone,  # Можно вернуть, если нужно показать в профиле
+                "phone": user.phone
             }
         }
     except Exception as e:
         print("UPSERT ERROR:", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================
+# ADMIN ROUTES (требуют авторизации)
+# ============================================
+
+@app.get("/admin/catalog")
+async def admin_catalog_get(current_user: dict = Depends(get_current_user)):
+    """Админский доступ к каталогу (требует авторизации)"""
+    # TODO: Добавить проверку роли администратора
+    return {
+        "items": await catalog_repo.admin_get_catalog()
+    }
