@@ -143,38 +143,55 @@ async def telegram_webapp_auth(data: TelegramWebAppAuth, response: Response):
 @app.post("/auth/telegram/oidc")
 async def telegram_oidc_auth(data: TelegramOIDCAuth, response: Response):
     """Авторизация через Telegram Login Widget (OIDC id_token)"""
-    user_data = verify_telegram_oidc(data.id_token)
-    
-    if not user_data:
-        raise HTTPException(status_code=401, detail="Invalid Telegram OIDC token")
-    
-    tg_id = user_data["id"]
-    username = user_data.get("username")
-    
-    
-    await db.upsert_telegram_user(
-        tg_id=tg_id,
-        first_name=user_data.get("first_name"),
-        username=username,
-        last_name=user_data.get("last_name"),
-        phone=user_data.get("phone"),
-        photo_url=user_data.get("photo_url")
-    )
-    
-    # Создаем токены
-    access_token = create_access_token(tg_id, username)
-    refresh_token = create_refresh_token()
-    
-    # Сохраняем refresh token в Redis
-    store_refresh_token(tg_id, refresh_token)
-    
-    # Устанавливаем cookies
-    set_auth_cookies(response, access_token, refresh_token)
-    
-    return {
-        "success": True,
-        "user": user_data
-    }
+    try:
+        print("[OIDC AUTH] Step 1: Verifying token...")
+        user_data = verify_telegram_oidc(data.id_token)
+        
+        if not user_data:
+            print("[OIDC AUTH] Token verification failed")
+            raise HTTPException(status_code=401, detail="Invalid Telegram OIDC token")
+        
+        print(f"[OIDC AUTH] Step 2: Token verified, user_id={user_data['id']}")
+        
+        tg_id = user_data["id"]
+        username = user_data.get("username")
+        
+        print("[OIDC AUTH] Step 3: Upserting user to database...")
+        await db.upsert_telegram_user(
+            tg_id=tg_id,
+            first_name=user_data.get("first_name"),
+            username=username,
+            last_name=user_data.get("last_name"),
+            phone=user_data.get("phone"),
+            photo_url=user_data.get("photo_url")
+        )
+        print("[OIDC AUTH] Step 4: User upserted successfully")
+        
+        print("[OIDC AUTH] Step 5: Creating tokens...")
+        access_token = create_access_token(tg_id, username)
+        refresh_token = create_refresh_token()
+        print("[OIDC AUTH] Step 6: Tokens created")
+        
+        print("[OIDC AUTH] Step 7: Storing refresh token in Redis...")
+        store_refresh_token(tg_id, refresh_token)
+        print("[OIDC AUTH] Step 8: Refresh token stored")
+        
+        print("[OIDC AUTH] Step 9: Setting cookies...")
+        set_auth_cookies(response, access_token, refresh_token)
+        print("[OIDC AUTH] Step 10: Cookies set")
+        
+        print("[OIDC AUTH] Step 11: Returning response")
+        return {
+            "success": True,
+            "user": user_data
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[OIDC AUTH ERROR] Unexpected error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/auth/refresh")
 async def refresh_access_token(
