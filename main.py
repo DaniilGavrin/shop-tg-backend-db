@@ -231,10 +231,18 @@ async def logout(
 
 @app.get("/me")
 async def get_me(current_user: dict = Depends(get_current_user)):
-    """Получить данные текущего пользователя"""
+    # Получаем полные данные пользователя из БД
+    user_data = await db.get_user_by_tg_id(current_user["tg_id"])
+    
     return {
         "authorized": True,
-        "user": current_user
+        "user": {
+            "tg_id": current_user["tg_id"],
+            "username": current_user["username"],
+            "first_name": user_data.get("first_name") if user_data else "User",
+            "last_name": user_data.get("last_name") if user_data else "",
+            "photo_url": user_data.get("photo_url") if user_data else "",
+        }
     }
 
 @app.post("/users/verify")

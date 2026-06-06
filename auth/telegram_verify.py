@@ -82,22 +82,20 @@ def verify_telegram_oidc(id_token: str) -> dict | None:
             print("[OIDC ERROR] No kid in token header")
             return None
         
-        # 3. Находим нужный ключ в JWKS
-        public_key = None
+        public_key_pem = None
         for key_data in jwks_data.get("keys", []):
             if key_data.get("kid") == kid:
-                public_key = key_data
+                # Конвертируем JWK dict в PEM строку
+                public_key_pem = jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(key_data))
                 break
-        
-        if not public_key:
+
+        if not public_key_pem:
             print(f"[OIDC ERROR] Key with kid={kid} not found in JWKS")
             return None
-        
-        # 4. Проверяем подпись и claims
-        # Используем BOT_ID (первая часть BOT_TOKEN) как audience
+
         payload = jwt.decode(
             id_token,
-            public_key,
+            public_key_pem,  # ✅ Теперь это PEM строка
             algorithms=["RS256"],
             audience=TG_BOT_ID,
             issuer="https://oauth.telegram.org"
