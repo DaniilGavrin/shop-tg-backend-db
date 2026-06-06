@@ -69,7 +69,7 @@ class Database:
     async def get_user_by_tg_id(self, tg_id: int) -> dict | None:
         """Получить данные пользователя по tg_id"""
         query = """
-            SELECT tg_id, first_name, username, last_name, phone
+            SELECT tg_id, first_name, username, last_name, phone, photo_url
             FROM users
             WHERE tg_id = $1
         """
