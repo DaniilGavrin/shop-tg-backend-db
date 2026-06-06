@@ -59,11 +59,16 @@ class Database:
                 username = COALESCE(EXCLUDED.username, users.username),
                 last_name = COALESCE(EXCLUDED.last_name, users.last_name),
                 phone = COALESCE(EXCLUDED.phone, users.phone),
-                photo_url = COALESCE(EXCLUDED.photo_url, users.photo_url)  # <-- 2. Обновляем при конфликте
+                photo_url = COALESCE(EXCLUDED.photo_url, users.photo_url) 
         """
+
+        print(f"[DB UPSERT] Query: {query.strip()}")
+        print(f"[DB UPSERT] Params: tg_id={tg_id}, first_name={first_name}, username={username}, last_name={last_name}, phone={phone}, photo_url={photo_url}")
+
+        
         await self.execute(
             query,
-            tg_id, first_name, username, last_name, phone, photo_url  # <-- 3. Передаём в execute
+            tg_id, first_name, username, last_name, phone, photo_url
         )
 
     async def get_user_by_tg_id(self, tg_id: int) -> dict | None:
