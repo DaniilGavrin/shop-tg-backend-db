@@ -117,6 +117,7 @@ async def telegram_webapp_auth(data: TelegramWebAppAuth, response: Response):
     
     tg_id = int(user_data["id"])
     username = user_data.get("username")
+    photo_url=user_data.get("photo_url")
     
     # Создаем токены
     access_token = create_access_token(tg_id, username)
@@ -149,6 +150,16 @@ async def telegram_oidc_auth(data: TelegramOIDCAuth, response: Response):
     
     tg_id = user_data["id"]
     username = user_data.get("username")
+    
+    
+    await db.upsert_telegram_user(
+        tg_id=tg_id,
+        first_name=user_data.get("first_name"),
+        username=username,
+        last_name=user_data.get("last_name"),
+        phone=user_data.get("phone"),
+        photo_url=user_data.get("photo_url")
+    )
     
     # Создаем токены
     access_token = create_access_token(tg_id, username)

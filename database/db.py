@@ -42,7 +42,8 @@ class Database:
         first_name: str,
         username: str | None = None,
         last_name: str | None = None,
-        phone: str | None = None
+        phone: str | None = None,
+        photo_url: str | None = None
     ):
         """
         Вставляет нового пользователя или обновляет существующего.
@@ -50,18 +51,19 @@ class Database:
         """
         query = """
             INSERT INTO users (
-                tg_id, first_name, username, last_name, phone, email
-            ) VALUES ($1, $2, $3, $4, $5, '')
+                tg_id, first_name, username, last_name, phone, photo_url, email
+            ) VALUES ($1, $2, $3, $4, $5, $6, '')
             ON CONFLICT (tg_id) DO UPDATE
             SET 
                 last_seen = NOW(),
                 username = COALESCE(EXCLUDED.username, users.username),
                 last_name = COALESCE(EXCLUDED.last_name, users.last_name),
-                phone = COALESCE(EXCLUDED.phone, users.phone)
+                phone = COALESCE(EXCLUDED.phone, users.phone),
+                photo_url = COALESCE(EXCLUDED.photo_url, users.photo_url)  # <-- 2. Обновляем при конфликте
         """
         await self.execute(
             query,
-            tg_id, first_name, username, last_name, phone
+            tg_id, first_name, username, last_name, phone, photo_url  # <-- 3. Передаём в execute
         )
 
     async def get_user_by_tg_id(self, tg_id: int) -> dict | None:

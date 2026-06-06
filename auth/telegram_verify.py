@@ -78,7 +78,6 @@ def verify_telegram_oidc(id_token: str) -> dict | None:
         public_key_pem = None
         for key_data in jwks_data.get("keys", []):
             if key_data.get("kid") == kid:
-                # ✅ ПРАВИЛЬНО: используем jose.jwk для преобразования JWK в PEM
                 key = jwk.construct(key_data, algorithm="RS256")
                 public_key_pem = key.to_pem().decode('utf-8')
                 print(f"[OIDC] Found key with kid={kid}")
@@ -91,7 +90,7 @@ def verify_telegram_oidc(id_token: str) -> dict | None:
         # 3. Проверяем подпись и claims
         payload = jwt.decode(
             id_token,
-            public_key_pem,  # ✅ Теперь это PEM строка
+            public_key_pem,
             algorithms=["RS256"],
             audience=TG_BOT_ID,
             issuer="https://oauth.telegram.org"
